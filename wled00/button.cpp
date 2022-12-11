@@ -22,6 +22,10 @@ void shortPressAction(uint8_t b)
     }
   } else {
     applyPreset(macroButton[b], CALL_MODE_BUTTON_PRESET);
+#ifdef WLED_ENABLE_BUTTON_PRESETS
+    handlePresets();
+    yield();
+#endif
   }
 
   // publish MQTT message
@@ -37,10 +41,15 @@ void longPressAction(uint8_t b)
   if (!macroLongPress[b]) {
     switch (b) {
       case 0: setRandomColor(col); colorUpdated(CALL_MODE_BUTTON); break;
-      case 1: bri += 8; stateUpdated(CALL_MODE_BUTTON); buttonPressedTime[b] = millis(); break; // repeatable action
+//    case 1: bri += 8; stateUpdated(CALL_MODE_BUTTON); buttonPressedTime[b] = millis(); break; // repeatable action
+      case 1: (bri == 255) ? (bri = 64) : (bri=255); stateUpdated(CALL_MODE_BUTTON); buttonPressedTime[b] = millis(); break;
     }
   } else {
     applyPreset(macroLongPress[b], CALL_MODE_BUTTON_PRESET);
+#ifdef WLED_ENABLE_BUTTON_PRESETS
+    handlePresets();
+    yield();
+#endif
   }
 
   // publish MQTT message
@@ -60,6 +69,10 @@ void doublePressAction(uint8_t b)
     }
   } else {
     applyPreset(macroDoublePress[b], CALL_MODE_BUTTON_PRESET);
+#ifdef WLED_ENABLE_BUTTON_PRESETS
+    handlePresets();
+    yield();
+#endif
   }
 
   // publish MQTT message
@@ -105,18 +118,18 @@ void handleSwitch(uint8_t b)
   }
 
   if (buttonLongPressed[b] == buttonPressedBefore[b]) return;
-    
+
   if (millis() - buttonPressedTime[b] > WLED_DEBOUNCE_THRESHOLD) { //fire edge event only after 50ms without change (debounce)
     if (!buttonPressedBefore[b]) { // on -> off
       if (macroButton[b]) applyPreset(macroButton[b], CALL_MODE_BUTTON_PRESET);
       else { //turn on
         if (!bri) {toggleOnOff(); stateUpdated(CALL_MODE_BUTTON);}
-      } 
+      }
     } else {  // off -> on
       if (macroLongPress[b]) applyPreset(macroLongPress[b], CALL_MODE_BUTTON_PRESET);
       else { //turn off
         if (bri) {toggleOnOff(); stateUpdated(CALL_MODE_BUTTON);}
-      } 
+      }
     }
 
     // publish MQTT message
@@ -132,7 +145,7 @@ void handleSwitch(uint8_t b)
 }
 
 #define ANALOG_BTN_READ_CYCLE 250   // min time between two analog reading cycles
-#define STRIP_WAIT_TIME 6           // max wait time in case of strip.isUpdating() 
+#define STRIP_WAIT_TIME 6           // max wait time in case of strip.isUpdating()
 #define POT_SMOOTHING 0.25f         // smoothing factor for raw potentiometer readings
 #define POT_SENSITIVITY 4           // changes below this amount are noise (POT scratching, or ADC noise)
 
@@ -165,7 +178,7 @@ void handleAnalog(uint8_t b)
   //while(strip.isUpdating() && (millis() - wait_started < STRIP_WAIT_TIME)) {
   //  delay(1);
   //}
-  //if (strip.isUpdating()) return; // give up 
+  //if (strip.isUpdating()) return; // give up
 
   oldRead[b] = aRead;
 
@@ -326,7 +339,7 @@ void esp32RMTInvertIdle()
 void handleIO()
 {
   handleButton();
-  
+
   //set relay when LEDs turn on
   if (strip.getBrightness())
   {
