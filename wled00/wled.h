@@ -712,6 +712,11 @@ WLED_GLOBAL int8_t spi_sclk  _INIT(SPISCLKPIN);
 WLED_GLOBAL StaticJsonDocument<JSON_BUFFER_SIZE> doc;
 WLED_GLOBAL volatile uint8_t jsonBufferLock _INIT(0);
 
+// HTTP Basic Auth
+WLED_GLOBAL bool http_auth _INIT(false);   // HTTP basic auth
+WLED_GLOBAL char http_user[33]  _INIT(""); // HTTP basic auth username
+WLED_GLOBAL char http_pass[33]  _INIT(""); // HTTP basic auth password
+
 // enable additional debug output
 #if defined(WLED_DEBUG_HOST)
   // On the host side, use netcat to receive the log statements: nc -l 7868 -u
