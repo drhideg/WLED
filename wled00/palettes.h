@@ -1,9 +1,10 @@
 /*
  * Color palettes for FastLED effects (65-73).
+ * 4 bytes per color: index, red, green, blue
  */
 
 // From ColorWavesWithPalettes by Mark Kriegsman: https://gist.github.com/kriegsman/8281905786e8b2632aeb
-// Unfortunaltely, these are stored in RAM!
+// Unfortunately, these are stored in RAM!
 
 // Gradient palette "ib_jul01_gp", originally from
 // http://soliton.vm.bytemark.co.uk/pub/cpt-city/ing/xmas/tn/ib_jul01.png.index.html
@@ -514,7 +515,7 @@ const byte Tiamat_gp[] PROGMEM = {
   220,  39,252,135, //gc from 177,254,255
   240, 193,213,253, //gc from 203,239,253
   255, 255,249,255};
-  
+
 //Custom palette by Aircoookie
 
 const byte April_Night_gp[] PROGMEM = {
@@ -598,16 +599,16 @@ const byte Atlantica_gp[] PROGMEM = {
     0, 255,   5,   0, //red
    60, 255,   5,   0,
    60, 196,  57,   2, //amber (start 61?)
-  120, 196,  57,   2, 
+  120, 196,  57,   2,
   120,   6, 126,   2, //green (start 126?)
   180,   6, 126,   2,
   180,   4,  30, 114, //blue (start 191?)
   255,   4,  30, 114};
-  
+
 // Gradient palette "temperature_gp", originally from
 // http://soliton.vm.bytemark.co.uk/pub/cpt-city/arendal/tn/temperature.png.index.html
 // converted for FastLED with gammas (2.6, 2.2, 2.5)
-// Size: 144 bytes of program space.  
+// Size: 144 bytes of program space.
 
 const byte temperature_gp[] PROGMEM = {
     0,   1, 27,105,
@@ -844,6 +845,23 @@ const byte candy2_gp[] PROGMEM = {
   211,  39, 33, 34,
   255,   1,  1,  1};
 
+const byte trafficlight_gp[] PROGMEM = {
+  0, 0, 0, 0,       //black
+  85, 0, 255, 0,    //green
+  170, 255, 255, 0, //yellow
+  255, 255, 0, 0};  //red
+
+// array of fastled palettes (palette 6 - 12)
+const TProgmemRGBPalette16 *const fastledPalettes[] PROGMEM = {
+  &PartyColors_p,               //06-00 Party
+  &CloudColors_p,               //07-01 Cloud
+  &LavaColors_p,                //08-02 Lava
+  &OceanColors_p,               //09-03 Ocean
+  &ForestColors_p,              //10-04 Forest
+  &RainbowColors_p,             //11-05 Rainbow
+  &RainbowStripeColors_p        //12-06 Rainbow Bands
+};
+
 // Single array of defined cpt-city color palettes.
 // This will let us programmatically choose one based on
 // a number, rather than having to activate each explicitly
@@ -906,7 +924,8 @@ const byte* const gGradientPalettes[] PROGMEM = {
   blink_red_gp,                 //67-54 Blink Red
   red_shift_gp,                 //68-55 Red Shift
   red_tide_gp,                  //69-56 Red Tide
-  candy2_gp                     //70-57 Candy2
+  candy2_gp,                    //70-57 Candy2
+  trafficlight_gp               //71-58 Traffic Light
 };
 
 #endif

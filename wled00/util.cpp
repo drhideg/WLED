@@ -14,7 +14,7 @@ int getNumVal(const String* req, uint16_t pos)
 void parseNumber(const char* str, byte* val, byte minv, byte maxv)
 {
   if (str == nullptr || str[0] == '\0') return;
-  if (str[0] == 'r') {*val = random8(minv,maxv?maxv:255); return;} // maxv for random cannot be 0
+  if (str[0] == 'r') {*val = hw_random8(minv,maxv?maxv:255); return;} // maxv for random cannot be 0
   bool wrap = false;
   if (str[0] == 'w' && strlen(str) > 1) {str++; wrap = true;}
   if (str[0] == '~') {
@@ -29,7 +29,7 @@ void parseNumber(const char* str, byte* val, byte minv, byte maxv)
     } else {
       if (wrap && *val == maxv && out > 0) out = minv;
       else if (wrap && *val == minv && out < 0) out = maxv;
-      else { 
+      else {
         out += *val;
         if (out > maxv) out = maxv;
         if (out < minv) out = minv;
@@ -52,7 +52,7 @@ void parseNumber(const char* str, byte* val, byte minv, byte maxv)
   *val = atoi(str);
 }
 
-
+//getVal supports inc/decrementing and random ("X~Y(r|~[w][-][Z])" form)
 bool getVal(JsonVariant elem, byte* val, byte vmin, byte vmax) {
   if (elem.is<int>()) {
 		if (elem < 0) return false; //ignore e.g. {"ps":-1}
@@ -60,12 +60,25 @@ bool getVal(JsonVariant elem, byte* val, byte vmin, byte vmax) {
     return true;
   } else if (elem.is<const char*>()) {
     const char* str = elem;
-    size_t len = strnlen(str, 12);
-    if (len == 0 || len > 10) return false;
+    size_t len = strnlen(str, 14);
+    if (len == 0 || len > 12) return false;
+    // fix for #3605 & #4346
+    // ignore vmin and vmax and use as specified in API
+    if (len > 3 && (strchr(str,'r') || strchr(str,'~') != strrchr(str,'~'))) vmax = vmin = 0; // we have "X~Y(r|~[w][-][Z])" form
+    // end fix
     parseNumber(str, val, vmin, vmax);
     return true;
   }
   return false; //key does not exist
+}
+
+
+bool getBoolVal(JsonVariant elem, bool dflt) {
+  if (elem.is<const char*>() && elem.as<const char*>()[0] == 't') {
+    return !dflt;
+  } else {
+    return elem | dflt;
+  }
 }
 
 
@@ -78,89 +91,35 @@ bool updateVal(const char* req, const char* key, byte* val, byte minv, byte maxv
   return true;
 }
 
-
-//append a numeric setting to string buffer
-void sappend(char stype, const char* key, int val)
-{
-  char ds[] = "d.Sf.";
-
-  switch(stype)
-  {
-    case 'c': //checkbox
-      oappend(ds);
-      oappend(key);
-      oappend(".checked=");
-      oappendi(val);
-      oappend(";");
-      break;
-    case 'v': //numeric
-      oappend(ds);
-      oappend(key);
-      oappend(".value=");
-      oappendi(val);
-      oappend(";");
-      break;
-    case 'i': //selectedIndex
-      oappend(ds);
-      oappend(key);
-      oappend(SET_F(".selectedIndex="));
-      oappendi(val);
-      oappend(";");
-      break;
-  }
+static size_t printSetFormInput(Print& settingsScript, const char* key, const char* selector, int value) {
+  return settingsScript.printf_P(PSTR("d.Sf.%s.%s=%d;"), key, selector, value);
 }
 
-
-//append a string setting to buffer
-void sappends(char stype, const char* key, char* val)
-{
-  switch(stype)
-  {
-    case 's': {//string (we can interpret val as char*)
-      String buf = val;
-      //convert "%" to "%%" to make EspAsyncWebServer happy
-      //buf.replace("%","%%");
-      oappend("d.Sf.");
-      oappend(key);
-      oappend(".value=\"");
-      oappend(buf.c_str());
-      oappend("\";");
-      break;}
-    case 'm': //message
-      oappend(SET_F("d.getElementsByClassName"));
-      oappend(key);
-      oappend(SET_F(".innerHTML=\""));
-      oappend(val);
-      oappend("\";");
-      break;
-  }
+size_t printSetFormCheckbox(Print& settingsScript, const char* key, int val) {
+  return printSetFormInput(settingsScript, key, PSTR("checked"), val);
+}
+size_t printSetFormValue(Print& settingsScript, const char* key, int val) {
+  return printSetFormInput(settingsScript, key, PSTR("value"), val);
+}
+size_t printSetFormIndex(Print& settingsScript, const char* key, int index) {
+  return printSetFormInput(settingsScript, key, PSTR("selectedIndex"), index);
 }
 
-
-bool oappendi(int i)
-{
-  char s[11];
-  sprintf(s, "%d", i);
-  return oappend(s);
+size_t printSetFormValue(Print& settingsScript, const char* key, const char* val) {
+  return settingsScript.printf_P(PSTR("d.Sf.%s.value=\"%s\";"),key,val);
 }
 
-
-bool oappend(const char* txt)
-{
-  uint16_t len = strlen(txt);
-  if (olen + len >= SETTINGS_STACK_BUF_SIZE)
-    return false;        // buffer full
-  strcpy(obuf + olen, txt);
-  olen += len;
-  return true;
+size_t printSetClassElementHTML(Print& settingsScript, const char* key, const int index, const char* val) {
+  return settingsScript.printf_P(PSTR("d.getElementsByClassName(\"%s\")[%d].innerHTML=\"%s\";"), key, index, val);
 }
+
 
 
 void prepareHostname(char* hostname)
 {
-  sprintf_P(hostname, "wled-%*s", 6, escapedMac.c_str() + 6);
+  sprintf_P(hostname, PSTR("wled-%*s"), 6, escapedMac.c_str() + 6);
   const char *pC = serverDescription;
-  uint8_t pos = 5;          // keep "wled-"
+  unsigned pos = 5;          // keep "wled-"
   while (*pC && pos < 24) { // while !null and not over length
     if (isalnum(*pC)) {     // if the current char is alpha-numeric append it to the hostname
       hostname[pos] = *pC;
@@ -182,7 +141,7 @@ void prepareHostname(char* hostname)
 
 bool isAsterisksOnly(const char* str, byte maxLen)
 {
-  for (byte i = 0; i < maxLen; i++) {
+  for (unsigned i = 0; i < maxLen; i++) {
     if (str[i] == 0) break;
     if (str[i] != '*') return false;
   }
@@ -194,46 +153,62 @@ bool isAsterisksOnly(const char* str, byte maxLen)
 //threading/network callback details: https://github.com/Aircoookie/WLED/pull/2336#discussion_r762276994
 bool requestJSONBufferLock(uint8_t module)
 {
-  unsigned long now = millis();
+  if (pDoc == nullptr) {
+    DEBUG_PRINTLN(F("ERROR: JSON buffer not allocated!"));
+    return false;
+  }
 
-  while (jsonBufferLock && millis()-now < 1000) delay(1); // wait for a second for buffer lock
-
-  if (millis()-now >= 1000) {
-    DEBUG_PRINT(F("ERROR: Locking JSON buffer failed! ("));
-    DEBUG_PRINT(jsonBufferLock);
-    DEBUG_PRINTLN(")");
-    return false; // waiting time-outed
+#if defined(ARDUINO_ARCH_ESP32)
+  // Use a recursive mutex type in case our task is the one holding the JSON buffer.
+  // This can happen during large JSON web transactions.  In this case, we continue immediately
+  // and then will return out below if the lock is still held.
+  if (xSemaphoreTakeRecursive(jsonBufferLockMutex, 250) == pdFALSE) return false;  // timed out waiting
+#elif defined(ARDUINO_ARCH_ESP8266)
+  // If we're in system context, delay() won't return control to the user context, so there's
+  // no point in waiting.
+  if (can_yield()) {
+    unsigned long now = millis();
+    while (jsonBufferLock && (millis()-now < 250)) delay(1); // wait for fraction for buffer lock
+  }
+#else
+  #error Unsupported task framework - fix requestJSONBufferLock
+#endif  
+  // If the lock is still held - by us, or by another task
+  if (jsonBufferLock) {
+    DEBUG_PRINTF_P(PSTR("ERROR: Locking JSON buffer (%d) failed! (still locked by %d)\n"), module, jsonBufferLock);
+#ifdef ARDUINO_ARCH_ESP32
+    xSemaphoreGiveRecursive(jsonBufferLockMutex);
+#endif
+    return false;
   }
 
   jsonBufferLock = module ? module : 255;
-  DEBUG_PRINT(F("JSON buffer locked. ("));
-  DEBUG_PRINT(jsonBufferLock);
-  DEBUG_PRINTLN(")");
-  fileDoc = &doc;  // used for applying presets (presets.cpp)
-  doc.clear();
+  DEBUG_PRINTF_P(PSTR("JSON buffer locked. (%d)\n"), jsonBufferLock);
+  pDoc->clear();
   return true;
 }
 
 
 void releaseJSONBufferLock()
 {
-  DEBUG_PRINT(F("JSON buffer released. ("));
-  DEBUG_PRINT(jsonBufferLock);
-  DEBUG_PRINTLN(")");
-  fileDoc = nullptr;
+  DEBUG_PRINTF_P(PSTR("JSON buffer released. (%d)\n"), jsonBufferLock);
   jsonBufferLock = 0;
+#ifdef ARDUINO_ARCH_ESP32
+  xSemaphoreGiveRecursive(jsonBufferLockMutex);
+#endif  
 }
 
 
 // extracts effect mode (or palette) name from names serialized string
-// caller must provide large enough buffer for name (incluing SR extensions)!
+// caller must provide large enough buffer for name (including SR extensions)!
 uint8_t extractModeName(uint8_t mode, const char *src, char *dest, uint8_t maxLen)
 {
   if (src == JSON_mode_names || src == nullptr) {
     if (mode < strip.getModeCount()) {
       char lineBuffer[256];
       //strcpy_P(lineBuffer, (const char*)pgm_read_dword(&(WS2812FX::_modeData[mode])));
-      strcpy_P(lineBuffer, strip.getModeData(mode));
+      strncpy_P(lineBuffer, strip.getModeData(mode), sizeof(lineBuffer)/sizeof(char)-1);
+      lineBuffer[sizeof(lineBuffer)/sizeof(char)-1] = '\0'; // terminate string
       size_t len = strlen(lineBuffer);
       size_t j = 0;
       for (; j < maxLen && j < len; j++) {
@@ -245,9 +220,15 @@ uint8_t extractModeName(uint8_t mode, const char *src, char *dest, uint8_t maxLe
     } else return 0;
   }
 
-  uint8_t qComma = 0;
+  if (src == JSON_palette_names && mode > (GRADIENT_PALETTE_COUNT + 13)) {
+    snprintf_P(dest, maxLen, PSTR("~ Custom %d ~"), 255-mode);
+    dest[maxLen-1] = '\0';
+    return strlen(dest);
+  }
+
+  unsigned qComma = 0;
   bool insideQuotes = false;
-  uint8_t printedChars = 0;
+  unsigned printedChars = 0;
   char singleJsonSymbol;
   size_t len = strlen_P(src);
 
@@ -284,11 +265,11 @@ uint8_t extractModeSlider(uint8_t mode, uint8_t slider, char *dest, uint8_t maxL
   if (mode < strip.getModeCount()) {
     String lineBuffer = FPSTR(strip.getModeData(mode));
     if (lineBuffer.length() > 0) {
-      int16_t start = lineBuffer.indexOf('@');
-      int16_t stop  = lineBuffer.indexOf(';', start);
+      unsigned start = lineBuffer.indexOf('@');
+      unsigned stop  = lineBuffer.indexOf(';', start);
       if (start>0 && stop>0) {
         String names = lineBuffer.substring(start, stop); // include @
-        int16_t nameBegin = 1, nameEnd, nameDefault;
+        unsigned nameBegin = 1, nameEnd, nameDefault;
         if (slider < 10) {
           for (size_t i=0; i<=slider; i++) {
             const char *tmpstr;
@@ -335,7 +316,7 @@ uint8_t extractModeSlider(uint8_t mode, uint8_t slider, char *dest, uint8_t maxL
         }
         // we have slider name (including default value) in the dest buffer
         for (size_t i=0; i<strlen(dest); i++) if (dest[i]=='=') { dest[i]='\0'; break; } // truncate default value
-        
+
       } else {
         // defaults to just speed and intensity since there is no slider data
         switch (slider) {
@@ -351,13 +332,13 @@ uint8_t extractModeSlider(uint8_t mode, uint8_t slider, char *dest, uint8_t maxL
 }
 
 
-// extracts mode parameter defaults from last section of mode data (e.g. "Juggle@!,Trail;!,!,;!;sx=16,ix=240,1d")
+// extracts mode parameter defaults from last section of mode data (e.g. "Juggle@!,Trail;!,!,;!;012;sx=16,ix=240")
 int16_t extractModeDefaults(uint8_t mode, const char *segVar)
 {
   if (mode < strip.getModeCount()) {
-    char lineBuffer[128] = "";
-    strncpy_P(lineBuffer, strip.getModeData(mode), 127);
-    lineBuffer[127] = '\0'; // terminate string
+    char lineBuffer[256];
+    strncpy_P(lineBuffer, strip.getModeData(mode), sizeof(lineBuffer)/sizeof(char)-1);
+    lineBuffer[sizeof(lineBuffer)/sizeof(char)-1] = '\0'; // terminate string
     if (lineBuffer[0] != 0) {
       char* startPtr = strrchr(lineBuffer, ';'); // last ";" in FX data
       if (!startPtr) return -1;
@@ -373,6 +354,16 @@ int16_t extractModeDefaults(uint8_t mode, const char *segVar)
 }
 
 
+void checkSettingsPIN(const char* pin) {
+  if (!pin) return;
+  if (!correctPIN && millis() - lastEditTime < PIN_RETRY_COOLDOWN) return; // guard against PIN brute force
+  bool correctBefore = correctPIN;
+  correctPIN = (strlen(settingsPIN) == 0 || strncmp(settingsPIN, pin, 4) == 0);
+  if (correctBefore != correctPIN) createEditHandler(correctPIN);
+  lastEditTime = millis();
+}
+
+
 uint16_t crc16(const unsigned char* data_p, size_t length) {
   uint8_t x;
   uint16_t crc = 0xFFFF;
@@ -385,19 +376,53 @@ uint16_t crc16(const unsigned char* data_p, size_t length) {
   return crc;
 }
 
+// fastled beatsin: 1:1 replacements to remove the use of fastled sin16()
+// Generates a 16-bit sine wave at a given BPM that oscillates within a given range. see fastled for details.
+uint16_t beatsin88_t(accum88 beats_per_minute_88, uint16_t lowest, uint16_t highest, uint32_t timebase, uint16_t phase_offset)
+{
+    uint16_t beat = beat88( beats_per_minute_88, timebase);
+    uint16_t beatsin (sin16_t( beat + phase_offset) + 32768);
+    uint16_t rangewidth = highest - lowest;
+    uint16_t scaledbeat = scale16( beatsin, rangewidth);
+    uint16_t result = lowest + scaledbeat;
+    return result;
+}
+
+// Generates a 16-bit sine wave at a given BPM that oscillates within a given range. see fastled for details.
+uint16_t beatsin16_t(accum88 beats_per_minute, uint16_t lowest, uint16_t highest, uint32_t timebase, uint16_t phase_offset)
+{
+    uint16_t beat = beat16( beats_per_minute, timebase);
+    uint16_t beatsin = (sin16_t( beat + phase_offset) + 32768);
+    uint16_t rangewidth = highest - lowest;
+    uint16_t scaledbeat = scale16( beatsin, rangewidth);
+    uint16_t result = lowest + scaledbeat;
+    return result;
+}
+
+// Generates an 8-bit sine wave at a given BPM that oscillates within a given range. see fastled for details.
+uint8_t beatsin8_t(accum88 beats_per_minute, uint8_t lowest, uint8_t highest, uint32_t timebase, uint8_t phase_offset)
+{
+    uint8_t beat = beat8( beats_per_minute, timebase);
+    uint8_t beatsin = sin8_t( beat + phase_offset);
+    uint8_t rangewidth = highest - lowest;
+    uint8_t scaledbeat = scale8( beatsin, rangewidth);
+    uint8_t result = lowest + scaledbeat;
+    return result;
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 // Begin simulateSound (to enable audio enhanced effects to display something)
 ///////////////////////////////////////////////////////////////////////////////
 // Currently 4 types defined, to be fine tuned and new types added
+// (only 2 used as stored in 1 bit in segment options, consider switching to a single global simulation type)
 typedef enum UM_SoundSimulations {
   UMS_BeatSin = 0,
   UMS_WeWillRockYou,
-  UMS_10_3,
+  UMS_10_13,
   UMS_14_3
 } um_soundSimulations_t;
 
-um_data_t* simulateSound(uint8_t simulationId) 
+um_data_t* simulateSound(uint8_t simulationId)
 {
   static uint8_t samplePeak;
   static float   FFT_MajorPeak;
@@ -426,7 +451,7 @@ um_data_t* simulateSound(uint8_t simulationId)
     um_data->u_data = new void*[um_data->u_size];
     um_data->u_data[0] = &volumeSmth;
     um_data->u_data[1] = &volumeRaw;
-    um_data->u_data[2] = fftResult; 
+    um_data->u_data[2] = fftResult;
     um_data->u_data[3] = &samplePeak;
     um_data->u_data[4] = &FFT_MajorPeak;
     um_data->u_data[5] = &my_magnitude;
@@ -443,15 +468,15 @@ um_data_t* simulateSound(uint8_t simulationId)
     default:
     case UMS_BeatSin:
       for (int i = 0; i<16; i++)
-        fftResult[i] = beatsin8(120 / (i+1), 0, 255);
-        // fftResult[i] = (beatsin8(120, 0, 255) + (256/16 * i)) % 256;
+        fftResult[i] = beatsin8_t(120 / (i+1), 0, 255);
+        // fftResult[i] = (beatsin8_t(120, 0, 255) + (256/16 * i)) % 256;
         volumeSmth = fftResult[8];
       break;
     case UMS_WeWillRockYou:
       if (ms%2000 < 200) {
-        volumeSmth = random8(255);
+        volumeSmth = hw_random8();
         for (int i = 0; i<5; i++)
-          fftResult[i] = random8(255);
+          fftResult[i] = hw_random8();
       }
       else if (ms%2000 < 400) {
         volumeSmth = 0;
@@ -459,9 +484,9 @@ um_data_t* simulateSound(uint8_t simulationId)
           fftResult[i] = 0;
       }
       else if (ms%2000 < 600) {
-        volumeSmth = random8(255);
+        volumeSmth = hw_random8();
         for (int i = 5; i<11; i++)
-          fftResult[i] = random8(255);
+          fftResult[i] = hw_random8();
       }
       else if (ms%2000 < 800) {
         volumeSmth = 0;
@@ -469,9 +494,9 @@ um_data_t* simulateSound(uint8_t simulationId)
           fftResult[i] = 0;
       }
       else if (ms%2000 < 1000) {
-        volumeSmth = random8(255);
+        volumeSmth = hw_random8();
         for (int i = 11; i<16; i++)
-          fftResult[i] = random8(255);
+          fftResult[i] = hw_random8();
       }
       else {
         volumeSmth = 0;
@@ -479,36 +504,108 @@ um_data_t* simulateSound(uint8_t simulationId)
           fftResult[i] = 0;
       }
       break;
-    case UMS_10_3:
+    case UMS_10_13:
       for (int i = 0; i<16; i++)
-        fftResult[i] = inoise8(beatsin8(90 / (i+1), 0, 200)*15 + (ms>>10), ms>>3);
+        fftResult[i] = inoise8(beatsin8_t(90 / (i+1), 0, 200)*15 + (ms>>10), ms>>3);
         volumeSmth = fftResult[8];
       break;
     case UMS_14_3:
       for (int i = 0; i<16; i++)
-        fftResult[i] = inoise8(beatsin8(120 / (i+1), 10, 30)*10 + (ms>>14), ms>>3);
+        fftResult[i] = inoise8(beatsin8_t(120 / (i+1), 10, 30)*10 + (ms>>14), ms>>3);
       volumeSmth = fftResult[8];
       break;
   }
 
-  samplePeak    = random8() > 250;
-  FFT_MajorPeak = volumeSmth;
-  maxVol        = 10;  // this gets feedback fro UI
+  samplePeak    = hw_random8() > 250;
+  FFT_MajorPeak = 21 + (volumeSmth*volumeSmth) / 8.0f; // walk thru full range of 21hz...8200hz
+  maxVol        = 31;  // this gets feedback fro UI
   binNum        = 8;   // this gets feedback fro UI
   volumeRaw = volumeSmth;
-  my_magnitude = 10000.0 / 8.0f; //no idea if 10000 is a good value for FFT_Magnitude ???
+  my_magnitude = 10000.0f / 8.0f; //no idea if 10000 is a good value for FFT_Magnitude ???
   if (volumeSmth < 1 ) my_magnitude = 0.001f;             // noise gate closed - mute
 
   return um_data;
 }
 
-
+static const char s_ledmap_tmpl[] PROGMEM = "ledmap%d.json";
+// enumerate all ledmapX.json files on FS and extract ledmap names if existing
 void enumerateLedmaps() {
   ledMaps = 1;
-  for (size_t i=1; i<10; i++) {
-    char fileName[16];
-    sprintf_P(fileName, PSTR("/ledmap%d.json"), i);
+  for (size_t i=1; i<WLED_MAX_LEDMAPS; i++) {
+    char fileName[33] = "/";
+    sprintf_P(fileName+1, s_ledmap_tmpl, i);
     bool isFile = WLED_FS.exists(fileName);
-    if (isFile) ledMaps |= 1 << i;
+
+    #ifndef ESP8266
+    if (ledmapNames[i-1]) { //clear old name
+      delete[] ledmapNames[i-1];
+      ledmapNames[i-1] = nullptr;
+    }
+    #endif
+
+    if (isFile) {
+      ledMaps |= 1 << i;
+
+      #ifndef ESP8266
+      if (requestJSONBufferLock(21)) {
+        if (readObjectFromFile(fileName, nullptr, pDoc)) {
+          size_t len = 0;
+          JsonObject root = pDoc->as<JsonObject>();
+          if (!root["n"].isNull()) {
+            // name field exists
+            const char *name = root["n"].as<const char*>();
+            if (name != nullptr) len = strlen(name);
+            if (len > 0 && len < 33) {
+              ledmapNames[i-1] = new char[len+1];
+              if (ledmapNames[i-1]) strlcpy(ledmapNames[i-1], name, 33);
+            }
+          }
+          if (!ledmapNames[i-1]) {
+            char tmp[33];
+            snprintf_P(tmp, 32, s_ledmap_tmpl, i);
+            len = strlen(tmp);
+            ledmapNames[i-1] = new char[len+1];
+            if (ledmapNames[i-1]) strlcpy(ledmapNames[i-1], tmp, 33);
+          }
+        }
+        releaseJSONBufferLock();
+      }
+      #endif
+    }
+
   }
+}
+
+/*
+ * Returns a new, random color wheel index with a minimum distance of 42 from pos.
+ */
+uint8_t get_random_wheel_index(uint8_t pos) {
+  uint8_t r = 0, x = 0, y = 0, d = 0;
+  while (d < 42) {
+    r = hw_random8();
+    x = abs(pos - r);
+    y = 255 - x;
+    d = MIN(x, y);
+  }
+  return r;
+}
+
+// float version of map()
+float mapf(float x, float in_min, float in_max, float out_min, float out_max) {
+  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
+
+// 32 bit random number generator, inlining uses more code, use hw_random16() if speed is critical (see fcn_declare.h)
+uint32_t hw_random(uint32_t upperlimit) {
+  uint32_t rnd = hw_random();
+  uint64_t scaled = uint64_t(rnd) * uint64_t(upperlimit);
+  return scaled >> 32;
+}
+
+int32_t hw_random(int32_t lowerlimit, int32_t upperlimit) {
+  if(lowerlimit >= upperlimit) {
+    return lowerlimit;
+  }
+  uint32_t diff = upperlimit - lowerlimit;
+  return hw_random(diff) + lowerlimit;
 }

@@ -1,11 +1,14 @@
 // force the compiler to show a warning to confirm that this file is included
 #warning **** Included USERMOD_BME280 version 2.0 ****
 
+#ifndef WLED_ENABLE_MQTT
+#error "This user mod requires MQTT to be enabled."
+#endif
+
 #pragma once
 
 #include "wled.h"
 #include <Arduino.h>
-#include <Wire.h>
 #include <BME280I2C.h>               // BME280 sensor
 #include <EnvironmentCalculations.h> // BME280 extended measurements
 
@@ -21,6 +24,7 @@ private:
   uint8_t  PressureDecimals = 0;    // Number of decimal places in published pressure values
   uint16_t TemperatureInterval = 5; // Interval to measure temperature (and humidity, dew point if available) in seconds
   uint16_t PressureInterval = 300;  // Interval to measure pressure in seconds
+  BME280I2C::I2CAddr I2CAddress = BME280I2C::I2CAddr_0x76;  // i2c address, defaults to 0x76
   bool PublishAlways = false;             // Publish values even when they have not changed
   bool UseCelsius = true;                 // Use Celsius for Reporting
   bool HomeAssistantDiscovery = false;    // Publish Home Assistant Device Information
@@ -28,25 +32,11 @@ private:
 
   // set the default pins based on the architecture, these get overridden by Usermod menu settings
   #ifdef ESP8266
-    //uint8_t RST_PIN = 16; // Uncoment for Heltec WiFi-Kit-8
+    //uint8_t RST_PIN = 16; // Un-comment for Heltec WiFi-Kit-8
   #endif
-  int8_t ioPin[2] = {i2c_scl, i2c_sda};   // I2C pins: SCL, SDA...defaults to Arch hardware pins but overridden at setup()
   bool initDone = false;
 
-  // BME280 sensor settings
-  BME280I2C::Settings settings{
-      BME280::OSR_X16, // Temperature oversampling x16
-      BME280::OSR_X16, // Humidity oversampling x16
-      BME280::OSR_X16, // Pressure oversampling x16
-      // Defaults
-      BME280::Mode_Forced,
-      BME280::StandbyTime_1000ms,
-      BME280::Filter_Off,
-      BME280::SpiEnable_False,
-      BME280I2C::I2CAddr_0x76 // I2C address. I2C specific. Default 0x76
-  };
-
-  BME280I2C bme{settings};
+  BME280I2C bme;
 
   uint8_t sensorType;
 
@@ -76,7 +66,7 @@ private:
   static const char _name[];
   static const char _enabled[];
 
-  // Read the BME280/BMP280 Sensor (which one runs depends on whether Celsius or Farenheit being set in Usermod Menu)
+  // Read the BME280/BMP280 Sensor (which one runs depends on whether Celsius or Fahrenheit being set in Usermod Menu)
   void UpdateBME280Data(int SensorType)
   {
     float _temperature, _humidity, _pressure;
@@ -158,8 +148,8 @@ private:
     JsonObject device = doc.createNestedObject(F("device")); // attach the sensor to the same device
     device[F("name")] = serverDescription;
     device[F("identifiers")] = "wled-sensor-" + String(mqttClientID);
-    device[F("manufacturer")] = F("WLED");
-    device[F("model")] = F("FOSS");
+    device[F("manufacturer")] = F(WLED_BRAND);
+    device[F("model")] = F(WLED_PRODUCT_NAME);
     device[F("sw_version")] = versionString;
 
     String temp;
@@ -179,40 +169,52 @@ private:
       }
     }
 
+    void initializeBmeComms()
+    {
+      BME280I2C::Settings settings{
+            BME280::OSR_X16,    // Temperature oversampling x16
+            BME280::OSR_X16,    // Humidity oversampling x16
+            BME280::OSR_X16,    // Pressure oversampling x16
+            BME280::Mode_Forced,
+            BME280::StandbyTime_1000ms,
+            BME280::Filter_Off,
+            BME280::SpiEnable_False,
+            I2CAddress
+        };
+
+      bme.setSettings(settings);
+      
+      if (!bme.begin())
+      {
+        sensorType = 0;
+        DEBUG_PRINTLN(F("Could not find BME280 I2C sensor!"));
+      }
+      else
+      {
+        switch (bme.chipModel())
+        {
+        case BME280::ChipModel_BME280:
+          sensorType = 1;
+          DEBUG_PRINTLN(F("Found BME280 sensor! Success."));
+          break;
+        case BME280::ChipModel_BMP280:
+          sensorType = 2;
+          DEBUG_PRINTLN(F("Found BMP280 sensor! No Humidity available."));
+          break;
+        default:
+          sensorType = 0;
+          DEBUG_PRINTLN(F("Found UNKNOWN sensor! Error!"));
+        }
+      }
+    }
+
 public:
   void setup()
   {
-    bool HW_Pins_Used = (ioPin[0]==i2c_scl && ioPin[1]==i2c_sda); // note whether architecture-based hardware SCL/SDA pins used
-    PinOwner po = PinOwner::UM_BME280; // defaults to being pinowner for SCL/SDA pins
-    PinManagerPinType pins[2] = { { ioPin[0], true }, { ioPin[1], true } };  // allocate pins
-    if (HW_Pins_Used) po = PinOwner::HW_I2C; // allow multiple allocations of HW I2C bus pins
-    if (!pinManager.allocateMultiplePins(pins, 2, po)) { sensorType=0; return; }
+    if (i2c_scl<0 || i2c_sda<0) { enabled = false; sensorType = 0; return; }
     
-    Wire.begin(ioPin[1], ioPin[0]);
-
-    if (!bme.begin())
-    {
-      sensorType = 0;
-      DEBUG_PRINTLN(F("Could not find BME280 I2C sensor!"));
-    }
-    else
-    {
-      switch (bme.chipModel())
-      {
-      case BME280::ChipModel_BME280:
-        sensorType = 1;
-        DEBUG_PRINTLN(F("Found BME280 sensor! Success."));
-        break;
-      case BME280::ChipModel_BMP280:
-        sensorType = 2;
-        DEBUG_PRINTLN(F("Found BMP280 sensor! No Humidity available."));
-        break;
-      default:
-        sensorType = 0;
-        DEBUG_PRINTLN(F("Found UNKNOWN sensor! Error!"));
-      }
-    }
-    initDone=true;
+    initializeBmeComms();
+    initDone = true;
   }
 
   void loop()
@@ -369,12 +371,11 @@ public:
     }
     else if (sensorType==2) //BMP280
     {
-      
       JsonArray temperature_json = user.createNestedArray(F("Temperature"));
       JsonArray pressure_json = user.createNestedArray(F("Pressure"));
-      temperature_json.add(roundf(sensorTemperature * powf(10, TemperatureDecimals)));
+      temperature_json.add(roundf(sensorTemperature * powf(10, TemperatureDecimals)) / powf(10, TemperatureDecimals));
       temperature_json.add(tempScale);
-      pressure_json.add(roundf(sensorPressure * powf(10, PressureDecimals)));
+      pressure_json.add(roundf(sensorPressure * powf(10, PressureDecimals)) / powf(10, PressureDecimals));
       pressure_json.add(F("hPa"));
     }
     else if (sensorType==1) //BME280
@@ -386,9 +387,9 @@ public:
       JsonArray dewpoint_json = user.createNestedArray(F("Dew Point"));
       temperature_json.add(roundf(sensorTemperature * powf(10, TemperatureDecimals)) / powf(10, TemperatureDecimals));
       temperature_json.add(tempScale);
-      humidity_json.add(roundf(sensorHumidity * powf(10, HumidityDecimals)));
+      humidity_json.add(roundf(sensorHumidity * powf(10, HumidityDecimals)) / powf(10, HumidityDecimals));
       humidity_json.add(F("%"));
-      pressure_json.add(roundf(sensorPressure * powf(10, PressureDecimals)));
+      pressure_json.add(roundf(sensorPressure * powf(10, PressureDecimals)) / powf(10, PressureDecimals));
       pressure_json.add(F("hPa"));
       heatindex_json.add(roundf(sensorHeatIndex * powf(10, TemperatureDecimals)) / powf(10, TemperatureDecimals));
       heatindex_json.add(tempScale);
@@ -403,6 +404,7 @@ public:
   {
     JsonObject top = root.createNestedObject(FPSTR(_name));
     top[FPSTR(_enabled)] = enabled;
+    top[F("I2CAddress")] = static_cast<uint8_t>(I2CAddress);
     top[F("TemperatureDecimals")] = TemperatureDecimals;
     top[F("HumidityDecimals")] = HumidityDecimals;
     top[F("PressureDecimals")] = PressureDecimals;
@@ -411,9 +413,6 @@ public:
     top[F("PublishAlways")] = PublishAlways;
     top[F("UseCelsius")] = UseCelsius;
     top[F("HomeAssistantDiscovery")] = HomeAssistantDiscovery;
-    JsonArray io_pin = top.createNestedArray(F("pin"));
-    for (byte i=0; i<2; i++) io_pin.add(ioPin[i]);
-    top[F("help4Pins")] = F("SCL,SDA"); // help for Settings page
     DEBUG_PRINTLN(F("BME280 config saved."));
   }
 
@@ -422,8 +421,6 @@ public:
   {
     // default settings values could be set here (or below using the 3-argument getJsonValue()) instead of in the class definition or constructor
     // setting them inside readFromConfig() is slightly more robust, handling the rare but plausible use case of single value being missing after boot (e.g. if the cfg.json was manually edited and a value was removed)
-
-    int8_t newPin[2]; for (byte i=0; i<2; i++) newPin[i] = ioPin[i]; // prepare to note changed pins
 
     JsonObject top = root[FPSTR(_name)];
     if (top.isNull()) {
@@ -435,6 +432,10 @@ public:
 
     configComplete &= getJsonValue(top[FPSTR(_enabled)], enabled);
     // A 3-argument getJsonValue() assigns the 3rd argument as a default value if the Json value is missing
+    uint8_t tmpI2cAddress;
+    configComplete &= getJsonValue(top[F("I2CAddress")], tmpI2cAddress, 0x76);
+    I2CAddress = static_cast<BME280I2C::I2CAddr>(tmpI2cAddress);
+
     configComplete &= getJsonValue(top[F("TemperatureDecimals")], TemperatureDecimals, 1);
     configComplete &= getJsonValue(top[F("HumidityDecimals")], HumidityDecimals, 0);
     configComplete &= getJsonValue(top[F("PressureDecimals")], PressureDecimals, 0);
@@ -443,27 +444,29 @@ public:
     configComplete &= getJsonValue(top[F("PublishAlways")], PublishAlways, false);
     configComplete &= getJsonValue(top[F("UseCelsius")], UseCelsius, true);
     configComplete &= getJsonValue(top[F("HomeAssistantDiscovery")], HomeAssistantDiscovery, false);
-    for (byte i=0; i<2; i++) configComplete &= getJsonValue(top[F("pin")][i], newPin[i], ioPin[i]);
 
     DEBUG_PRINT(FPSTR(_name));
     if (!initDone) {
       // first run: reading from cfg.json
-      for (byte i=0; i<2; i++) ioPin[i] = newPin[i];
       DEBUG_PRINTLN(F(" config loaded."));
     } else {
-      DEBUG_PRINTLN(F(" config (re)loaded."));
       // changing parameters from settings page
-      bool pinsChanged = false;
-      for (byte i=0; i<2; i++) if (ioPin[i] != newPin[i]) { pinsChanged = true; break; } // check if any pins changed
-      if (pinsChanged) { //if pins changed, deallocate old pins and allocate new ones
-        PinOwner po = PinOwner::UM_BME280;
-        if (ioPin[0]==i2c_scl && ioPin[1]==i2c_sda) po = PinOwner::HW_I2C;  // allow multiple allocations of HW I2C bus pins
-        pinManager.deallocateMultiplePins((const uint8_t *)ioPin, 2, po);  // deallocate pins
-        for (byte i=0; i<2; i++) ioPin[i] = newPin[i];
-        setup();
-      }
-      // use "return !top["newestParameter"].isNull();" when updating Usermod with new features
-      return !top[F("pin")].isNull();
+      DEBUG_PRINTLN(F(" config (re)loaded."));
+
+      // Reset all known values
+      sensorType = 0;
+      sensorTemperature = 0;
+      sensorHumidity = 0;
+      sensorHeatIndex = 0;
+      sensorDewPoint = 0;
+      sensorPressure = 0;
+      lastTemperature = 0;
+      lastHumidity = 0;
+      lastHeatIndex = 0;
+      lastDewPoint = 0;
+      lastPressure = 0;
+      
+      initializeBmeComms();
     }
 
     return configComplete;

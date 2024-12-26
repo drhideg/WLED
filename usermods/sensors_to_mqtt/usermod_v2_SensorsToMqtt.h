@@ -1,8 +1,11 @@
+#ifndef WLED_ENABLE_MQTT
+#error "This user mod requires MQTT to be enabled."
+#endif
+
 #pragma once
 
 #include "wled.h"
 #include <Arduino.h>
-#include <Wire.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BMP280.h>
 #include <Adafruit_CCS811.h>
@@ -11,14 +14,6 @@
 Adafruit_BMP280 bmp;
 Adafruit_Si7021 si7021;
 Adafruit_CCS811 ccs811;
-
-#ifdef ARDUINO_ARCH_ESP32 //ESP32 boards
-uint8_t SCL_PIN = 22;
-uint8_t SDA_PIN = 21;
-#else //ESP8266 boards
-uint8_t SCL_PIN = 5;
-uint8_t SDA_PIN = 4;
-#endif
 
 class UserMod_SensorsToMQTT : public Usermod
 {
@@ -90,8 +85,8 @@ private:
 
     JsonObject device = doc.createNestedObject("device"); // attach the sensor to the same device
     device["identifiers"] = String("wled-sensor-") + mqttClientID;
-    device["manufacturer"] = "Aircoookie";
-    device["model"] = "WLED";
+    device["manufacturer"] = F(WLED_BRAND);
+    device["model"] = F(WLED_PRODUCT_NAME);
     device["sw_version"] = VERSION;
     device["name"] = mqttClientID;
 
@@ -227,7 +222,6 @@ public:
   void setup()
   {
     Serial.println("Starting!");
-    Wire.begin(SDA_PIN, SCL_PIN);
     Serial.println("Initializing sensors.. ");
     _initialize();
   }
